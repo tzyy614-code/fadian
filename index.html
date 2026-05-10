@@ -6930,12 +6930,26 @@ function renderQuestion() {
       [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
     }
     sessionState._currentShuffled = shuffled; // 记录映射关系
-    optionsContainer.innerHTML = shuffled.map((item, i) => `
-      <button class="quiz-option w-full text-left" onclick="handleAnswer(${item.i})" data-index="${i}">
-        <span class="quiz-option-letter">${LETTERS[i]}</span>
-        <span class="text-xs">${item.opt}</span>
-      </button>
-    `).join('');
+    // 复用选项按钮 DOM，只更新内容（避免 innerHTML 重建）
+    const existing = optionsContainer.querySelectorAll('.quiz-option');
+    if (existing.length === shuffled.length) {
+      existing.forEach((btn, i) => {
+        const item = shuffled[i];
+        btn.className = 'quiz-option w-full text-left';
+        btn.onclick = function() { handleAnswer(item.i); };
+        btn.dataset.index = i;
+        btn.querySelector('.quiz-option-letter').textContent = LETTERS[i];
+        btn.querySelector('.quiz-option-text').textContent = item.opt;
+        btn.style.display = '';
+      });
+    } else {
+      optionsContainer.innerHTML = shuffled.map((item, i) => `
+        <button class="quiz-option w-full text-left" onclick="handleAnswer(${item.i})" data-index="${i}">
+          <span class="quiz-option-letter">${LETTERS[i]}</span>
+          <span class="quiz-option-text text-xs">${item.opt}</span>
+        </button>
+      `).join('');
+    }
   }
 
   // 自动滚动确保选项可见
