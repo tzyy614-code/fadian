@@ -5076,6 +5076,50 @@ const CASE_CATEGORY_LABELS = { lowcarbon: '低碳', green: '绿色', watersave: 
 
 // ===== 图片预加载 =====
 const _decodedImages = new Map(); // 保留引用，防止已解码位图被 GC
+const _compressedCache = new Map(); // url -> 压缩后的 blob URL
+const COMPRESS_MAX_WIDTH = 800; // 压缩最大宽度（手机屏幕足够用）
+const COMPRESS_QUALITY = 0.85;
+
+// 用 Canvas 把 PNG 压缩成 JPEG，并缩放到合理尺寸（手机解码速度提升 5-10 倍）
+function compressImage(url) {
+  if (_compressedCache.has(url)) return Promise.resolve(_compressedCache.get(url));
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onerror = () => resolve(url);
+    img.onload = () => {
+      try {
+        const ratio = Math.min(1, COMPRESS_MAX_WIDTH / img.naturalWidth);
+        const w = Math.round(img.naturalWidth * ratio);
+        const h = Math.round(img.naturalHeight * ratio);
+        const canvas = document.createElement('canvas');
+        canvas.width = w;
+        canvas.height = h;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0, w, h);
+        canvas.toBlob((blob) => {
+          if (blob && blob.size < img.naturalWidth * img.naturalHeight * 4) {
+            const blobUrl = URL.createObjectURL(blob);
+            _compressedCache.set(url, blobUrl);
+            // LRU 清理（超过30张）
+            if (_compressedCache.size > 30) {
+              const firstKey = _compressedCache.keys().next().value;
+              const oldUrl = _compressedCache.get(firstKey);
+              if (oldUrl && oldUrl.startsWith('blob:')) URL.revokeObjectURL(oldUrl);
+              _compressedCache.delete(firstKey);
+            }
+            resolve(blobUrl);
+          } else {
+            resolve(url);
+          }
+        }, 'image/jpeg', COMPRESS_QUALITY);
+      } catch (e) {
+        resolve(url);
+      }
+    };
+    img.src = encodeURI(url);
+  });
+}
+
 function preloadImage(url) {
   if (_decodedImages.has(url)) return Promise.resolve(_decodedImages.get(url));
   return new Promise((resolve) => {
@@ -5087,15 +5131,17 @@ function preloadImage(url) {
       if (img.decode) {
         img.decode().then(() => {
           _decodedImages.set(url, img);
-          // LRU：超过50张时清理最旧的
           if (_decodedImages.size > 50) {
             const firstKey = _decodedImages.keys().next().value;
             _decodedImages.delete(firstKey);
           }
+          // 同时启动压缩，下次切换更快
+          compressImage(url);
           resolve(img);
         }).catch(() => resolve(img));
       } else {
         _decodedImages.set(url, img);
+        compressImage(url);
         resolve(img);
       }
     };
@@ -6901,26 +6947,35 @@ function renderQuestion() {
   if (imgContainer && imgEl) {
     const newSrc = getQuestionImageUrl(q.branch, q.id);
     if (newSrc) {
-      const currentSrc = imgEl.getAttribute('src') || '';
+      const currentSrc = imgEl.getAttribute('data-src') || imgEl.getAttribute('src') || '';
       if (currentSrc !== newSrc) {
         imgEl.onload = null;
         imgEl.onerror = null;
         if (imgSkeleton) imgSkeleton.classList.remove('hidden');
-        // 优先使用已预解码的图片（瞬间显示）
-        if (_decodedImages.has(newSrc)) {
-          imgEl.src = newSrc;
+        // 优先级：压缩版本(JPEG缩略) > 已预解码 > 原图
+        const displayUrl = _compressedCache.get(newSrc) || newSrc;
+        if (_compressedCache.has(newSrc) || _decodedImages.has(newSrc)) {
+          // 已优化版本，瞬间显示
+          imgEl.src = displayUrl;
+          imgEl.setAttribute('data-src', newSrc);
           if (imgSkeleton) imgSkeleton.classList.add('hidden');
         } else {
           imgEl.src = newSrc;
+          imgEl.setAttribute('data-src', newSrc);
           // 用 decode() 异步解码，避免阻塞主线程
           if (imgEl.decode) {
             imgEl.decode().then(() => {
               if (imgSkeleton) imgSkeleton.classList.add('hidden');
+              // 后台启动压缩，下次切换瞬间显示
+              compressImage(newSrc);
             }).catch(() => {
               if (imgSkeleton) imgSkeleton.classList.add('hidden');
             });
           } else {
-            imgEl.onload = function() { if (imgSkeleton) imgSkeleton.classList.add('hidden'); };
+            imgEl.onload = function() {
+              if (imgSkeleton) imgSkeleton.classList.add('hidden');
+              compressImage(newSrc);
+            };
           }
           imgEl.onerror = function() {
             if (imgSkeleton) imgSkeleton.classList.add('hidden');
