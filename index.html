@@ -5087,33 +5087,41 @@ function compressImage(url) {
     const img = new Image();
     img.onerror = () => resolve(url);
     img.onload = () => {
-      try {
-        const ratio = Math.min(1, COMPRESS_MAX_WIDTH / img.naturalWidth);
-        const w = Math.round(img.naturalWidth * ratio);
-        const h = Math.round(img.naturalHeight * ratio);
-        const canvas = document.createElement('canvas');
-        canvas.width = w;
-        canvas.height = h;
-        const ctx = canvas.getContext('2d');
-        ctx.drawImage(img, 0, 0, w, h);
-        canvas.toBlob((blob) => {
-          if (blob && blob.size < img.naturalWidth * img.naturalHeight * 4) {
-            const blobUrl = URL.createObjectURL(blob);
-            _compressedCache.set(url, blobUrl);
-            // LRU 清理（超过30张）
-            if (_compressedCache.size > 30) {
-              const firstKey = _compressedCache.keys().next().value;
-              const oldUrl = _compressedCache.get(firstKey);
-              if (oldUrl && oldUrl.startsWith('blob:')) URL.revokeObjectURL(oldUrl);
-              _compressedCache.delete(firstKey);
+      const doCompress = () => {
+        try {
+          const ratio = Math.min(1, COMPRESS_MAX_WIDTH / img.naturalWidth);
+          const w = Math.round(img.naturalWidth * ratio);
+          const h = Math.round(img.naturalHeight * ratio);
+          const canvas = document.createElement('canvas');
+          canvas.width = w;
+          canvas.height = h;
+          const ctx = canvas.getContext('2d');
+          ctx.drawImage(img, 0, 0, w, h);
+          canvas.toBlob((blob) => {
+            if (blob && blob.size < img.naturalWidth * img.naturalHeight * 4) {
+              const blobUrl = URL.createObjectURL(blob);
+              _compressedCache.set(url, blobUrl);
+              // LRU 清理（超过30张）
+              if (_compressedCache.size > 30) {
+                const firstKey = _compressedCache.keys().next().value;
+                const oldUrl = _compressedCache.get(firstKey);
+                if (oldUrl && oldUrl.startsWith('blob:')) URL.revokeObjectURL(oldUrl);
+                _compressedCache.delete(firstKey);
+              }
+              resolve(blobUrl);
+            } else {
+              resolve(url);
             }
-            resolve(blobUrl);
-          } else {
-            resolve(url);
-          }
-        }, 'image/jpeg', COMPRESS_QUALITY);
-      } catch (e) {
-        resolve(url);
+          }, 'image/jpeg', COMPRESS_QUALITY);
+        } catch (e) {
+          resolve(url);
+        }
+      };
+      // 在浏览器空闲时执行 Canvas 压缩，避免阻塞主线程
+      if (window.requestIdleCallback) {
+        requestIdleCallback(doCompress, { timeout: 2000 });
+      } else {
+        setTimeout(doCompress, 0);
       }
     };
     img.src = encodeURI(url);
@@ -6815,9 +6823,10 @@ function startBranch(branchId) {
   const branch = BRANCHES.find(b => b.id === branchId);
   if (!branch) return;
 
-  // 检查是否解锁Boss
+  // 检查是否解锁Boss（仅当未击败过该 Boss 时弹出挑战；已击败的章节直接进入答题）
   const progress = gameState.branchProgress[branchId] || 0;
-  if (progress >= branch.levels) {
+  const bossDefeated = (gameState.defeatedBosses || []).includes(branchId);
+  if (progress >= branch.levels && !bossDefeated) {
     bossSystem.show(branchId);
     return;
   }
@@ -6862,6 +6871,8 @@ function startBranch(branchId) {
   if (quizBranchName) quizBranchName.textContent = branch.name;
   showPage('page-quiz');
   renderQuestion();
+  // 进入答题后，浏览器空闲时批量预加载所有题目图片
+  idlePreloadAllQuestionImages();
 }
 
 function shuffleArray(arr) {
@@ -6897,6 +6908,36 @@ function preloadUpcomingQuestionImages(currentQ, count) {
     if (!url || _preloadedQuestionImages.has(url)) continue;
     _preloadedQuestionImages.add(url);
     preloadImage(url);
+  }
+}
+
+// 在浏览器空闲时批量预加载所有题目图片（单线程顺序加载，避免带宽竞争）
+function idlePreloadAllQuestionImages() {
+  const questions = sessionState.currentQuestions;
+  if (!questions || questions.length === 0) return;
+  let i = 0;
+  function loadNext() {
+    while (i < questions.length) {
+      const q = questions[i++];
+      const url = getQuestionImageUrl(q.branch, q.id);
+      if (!url) continue;
+      if (_decodedImages.has(url) || _preloadedQuestionImages.has(url)) continue;
+      _preloadedQuestionImages.add(url);
+      // 加载完后递归调用，单线程顺序加载
+      preloadImage(url).then(() => {
+        if (window.requestIdleCallback) {
+          requestIdleCallback(loadNext, { timeout: 3000 });
+        } else {
+          setTimeout(loadNext, 100);
+        }
+      });
+      return; // 一次只启动一个加载任务
+    }
+  }
+  if (window.requestIdleCallback) {
+    requestIdleCallback(loadNext, { timeout: 3000 });
+  } else {
+    setTimeout(loadNext, 200);
   }
 }
 
@@ -6951,34 +6992,39 @@ function renderQuestion() {
       if (currentSrc !== newSrc) {
         imgEl.onload = null;
         imgEl.onerror = null;
+        // 立即隐藏旧图，骨架屏覆盖（避免浏览器保留显示旧图）
+        imgEl.style.visibility = 'hidden';
         if (imgSkeleton) imgSkeleton.classList.remove('hidden');
         // 优先级：压缩版本(JPEG缩略) > 已预解码 > 原图
         const displayUrl = _compressedCache.get(newSrc) || newSrc;
+        const showImg = function() {
+          imgEl.style.visibility = '';
+          if (imgSkeleton) imgSkeleton.classList.add('hidden');
+        };
         if (_compressedCache.has(newSrc) || _decodedImages.has(newSrc)) {
           // 已优化版本，瞬间显示
           imgEl.src = displayUrl;
           imgEl.setAttribute('data-src', newSrc);
-          if (imgSkeleton) imgSkeleton.classList.add('hidden');
+          showImg();
         } else {
           imgEl.src = newSrc;
           imgEl.setAttribute('data-src', newSrc);
           // 用 decode() 异步解码，避免阻塞主线程
           if (imgEl.decode) {
             imgEl.decode().then(() => {
-              if (imgSkeleton) imgSkeleton.classList.add('hidden');
-              // 后台启动压缩，下次切换瞬间显示
+              showImg();
               compressImage(newSrc);
             }).catch(() => {
-              if (imgSkeleton) imgSkeleton.classList.add('hidden');
+              showImg();
             });
           } else {
             imgEl.onload = function() {
-              if (imgSkeleton) imgSkeleton.classList.add('hidden');
+              showImg();
               compressImage(newSrc);
             };
           }
           imgEl.onerror = function() {
-            if (imgSkeleton) imgSkeleton.classList.add('hidden');
+            showImg();
             onImgError(this);
           };
         }
