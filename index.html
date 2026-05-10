@@ -5075,11 +5075,30 @@ const BRANCH_NAME_MAP = { general: '总则', pollution: '污染防治', ecology:
 const CASE_CATEGORY_LABELS = { lowcarbon: '低碳', green: '绿色', watersave: '节水', energysave: '节能', other: '其他' };
 
 // ===== 图片预加载 =====
+const _decodedImages = new Map(); // 保留引用，防止已解码位图被 GC
 function preloadImage(url) {
+  if (_decodedImages.has(url)) return Promise.resolve(_decodedImages.get(url));
   return new Promise((resolve) => {
     const img = new Image();
     img.decoding = 'async';
-    img.onload = img.onerror = () => resolve(img);
+    img.onerror = () => resolve(img);
+    img.onload = () => {
+      // 主动调用 decode() 完成解码，避免切换时阻塞主线程
+      if (img.decode) {
+        img.decode().then(() => {
+          _decodedImages.set(url, img);
+          // LRU：超过50张时清理最旧的
+          if (_decodedImages.size > 50) {
+            const firstKey = _decodedImages.keys().next().value;
+            _decodedImages.delete(firstKey);
+          }
+          resolve(img);
+        }).catch(() => resolve(img));
+      } else {
+        _decodedImages.set(url, img);
+        resolve(img);
+      }
+    };
     img.src = encodeURI(url);
   });
 }
@@ -6887,21 +6906,27 @@ function renderQuestion() {
         imgEl.onload = null;
         imgEl.onerror = null;
         if (imgSkeleton) imgSkeleton.classList.remove('hidden');
-        const loadHint = document.getElementById('img-load-hint');
-        const retryBtn = document.getElementById('img-retry-btn');
-        const loadIcon = document.getElementById('img-load-icon');
-        if (loadHint) { loadHint.textContent = '图片加载中...'; loadHint.classList.remove('hidden'); }
-        if (retryBtn) retryBtn.classList.add('hidden');
-        if (loadIcon) loadIcon.classList.remove('hidden');
-        imgEl.src = newSrc;
-        imgEl.onload = function() { if (imgSkeleton) imgSkeleton.classList.add('hidden'); };
-        imgEl.onerror = function() {
+        // 优先使用已预解码的图片（瞬间显示）
+        if (_decodedImages.has(newSrc)) {
+          imgEl.src = newSrc;
           if (imgSkeleton) imgSkeleton.classList.add('hidden');
-          if (retryBtn) retryBtn.classList.remove('hidden');
-          if (loadIcon) loadIcon.classList.add('hidden');
-          if (loadHint) loadHint.textContent = '图片加载失败，点击重试';
-          onImgError(this);
-        };
+        } else {
+          imgEl.src = newSrc;
+          // 用 decode() 异步解码，避免阻塞主线程
+          if (imgEl.decode) {
+            imgEl.decode().then(() => {
+              if (imgSkeleton) imgSkeleton.classList.add('hidden');
+            }).catch(() => {
+              if (imgSkeleton) imgSkeleton.classList.add('hidden');
+            });
+          } else {
+            imgEl.onload = function() { if (imgSkeleton) imgSkeleton.classList.add('hidden'); };
+          }
+          imgEl.onerror = function() {
+            if (imgSkeleton) imgSkeleton.classList.add('hidden');
+            onImgError(this);
+          };
+        }
       }
       imgContainer.classList.remove('hidden');
     } else {
@@ -6913,8 +6938,8 @@ function renderQuestion() {
     }
   }
 
-  // 预加载接下来3题的配图
-  preloadUpcomingQuestionImages(q, 3);
+  // 用户看到题目后立即预加载并预解码下一题图片，切换时瞬间显示
+  preloadUpcomingQuestionImages(q, 2);
 
   if (questionText) questionText.textContent = q.question;
   if (explanationPanel) explanationPanel.classList.add('hidden');
@@ -6952,11 +6977,9 @@ function renderQuestion() {
     }
   }
 
-  // 自动滚动确保选项可见
-  setTimeout(() => {
-    const opts = document.getElementById('question-options');
-    if (opts) opts.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-  }, 100);
+  // 自动滚动确保选项可见（instant，不阻塞切换）
+  const opts = document.getElementById('question-options');
+  if (opts) opts.scrollIntoView({ behavior: 'auto', block: 'nearest' });
 }
 
 function handleAnswer(originalIndex) {
@@ -7213,7 +7236,7 @@ function showExplanation(q, isCorrect) {
   lawEl.textContent = q.law;
   textEl.textContent = q.explain;
   panel.classList.remove('hidden');
-  panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  panel.scrollIntoView({ behavior: 'auto', block: 'nearest' });
 }
 
 function quizNext() {
@@ -7225,7 +7248,7 @@ function quizNext() {
 
   gameState.currentQuestionIndex++;
   const quizPage = document.getElementById('page-quiz');
-  if (quizPage) quizPage.scrollTo({ top: 0, behavior: 'smooth' });
+  if (quizPage) quizPage.scrollTo({ top: 0, behavior: 'auto' });
 
   // 更新章节进度（基于已答题目数量）
   const branch = BRANCHES.find(b => b.id === gameState.currentBranch);
