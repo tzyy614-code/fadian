@@ -5079,6 +5079,7 @@ const _decodedImages = new Map(); // 保留引用，防止已解码位图被 GC
 const _compressedCache = new Map(); // url -> 压缩后的 blob URL
 const COMPRESS_MAX_WIDTH = 800; // 压缩最大宽度（手机屏幕足够用）
 const COMPRESS_QUALITY = 0.85;
+const IMG_CACHE_MAX = 40; // 两个缓存对齐，避免 decoded 命中但 compressed 已淘汰
 
 // 用 Canvas 把 PNG 压缩成 JPEG，并缩放到合理尺寸（手机解码速度提升 5-10 倍）
 function compressImage(url) {
@@ -5098,8 +5099,8 @@ function compressImage(url) {
           if (blob) {
             const blobUrl = URL.createObjectURL(blob);
             _compressedCache.set(url, blobUrl);
-            // LRU 清理（超过30张）
-            if (_compressedCache.size > 30) {
+            // FIFO 清理（按插入顺序删最老的）
+            if (_compressedCache.size > IMG_CACHE_MAX) {
               const firstKey = _compressedCache.keys().next().value;
               const oldUrl = _compressedCache.get(firstKey);
               if (oldUrl && oldUrl.startsWith('blob:')) URL.revokeObjectURL(oldUrl);
@@ -5144,7 +5145,7 @@ function preloadImage(url) {
       if (img.decode) {
         img.decode().then(() => {
           _decodedImages.set(url, img);
-          if (_decodedImages.size > 50) {
+          if (_decodedImages.size > IMG_CACHE_MAX) {
             const firstKey = _decodedImages.keys().next().value;
             _decodedImages.delete(firstKey);
           }
@@ -5921,6 +5922,10 @@ function showPage(pageId, isBack) {
   const currentVisible = document.querySelector('.page:not(.hidden)');
   if (!isBack && currentVisible && currentVisible.id !== pageId) {
     navStack.push(currentVisible.id);
+  }
+  // 离开答题页时停止后台预加载，避免与新页面图片抢带宽
+  if (currentVisible && currentVisible.id === 'page-quiz' && pageId !== 'page-quiz') {
+    if (typeof stopIdlePreload === 'function') stopIdlePreload();
   }
   document.querySelectorAll('.page').forEach(p => { p.classList.add('hidden'); p.scrollTop = 0; });
   const target = document.getElementById(pageId);
@@ -6876,6 +6881,8 @@ function startBranch(branchId) {
   if (quizBranchName) quizBranchName.textContent = branch.name;
   showPage('page-quiz');
   renderQuestion();
+  // 进入新关卡前清理上次的预加载标记，确保 idle 预加载能重新拉起本章节图片
+  _preloadedQuestionImages.clear();
   // 进入答题后，浏览器空闲时批量预加载所有题目图片
   idlePreloadAllQuestionImages();
 }
@@ -7015,6 +7022,17 @@ function renderQuestion() {
           // 已优化版本，瞬间显示
           imgEl.src = displayUrl;
           imgEl.setAttribute('data-src', newSrc);
+          // 兜底 onerror：缓存的 blob URL 可能已被 LRU 撤销
+          imgEl.onerror = function() {
+            // 清掉无效缓存，回退到原图
+            if (_compressedCache.has(newSrc)) {
+              const stale = _compressedCache.get(newSrc);
+              if (stale && stale.startsWith('blob:')) URL.revokeObjectURL(stale);
+              _compressedCache.delete(newSrc);
+            }
+            this.src = newSrc;
+            this.onerror = function() { showImg(); onImgError(this); };
+          };
           showImg();
         } else {
           imgEl.src = newSrc;
