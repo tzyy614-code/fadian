@@ -697,46 +697,33 @@ body {
   90% { transform: rotate(0deg) scale(1.01); }
 }
 
-/* ===== HP扣血反馈：抖动 + 红色闪光 ===== */
-.hp-damage { animation: hpDamage 0.5s ease-out; }
+/* ===== HP扣血反馈：纯transform抖动，避免重绘 ===== */
+.hp-damage { animation: hpDamage 0.4s ease-out; }
 @keyframes hpDamage {
-  0% { transform: translateX(0); }
-  20% { transform: translateX(-6px); background-color: rgba(239,68,68,0.25); border-radius: 8px; }
-  40% { transform: translateX(6px); background-color: rgba(239,68,68,0.18); border-radius: 8px; }
-  60% { transform: translateX(-4px); background-color: rgba(239,68,68,0.12); border-radius: 8px; }
-  80% { transform: translateX(4px); }
-  100% { transform: translateX(0); background-color: transparent; }
+  0%, 100% { transform: translateX(0); }
+  25% { transform: translateX(-5px); }
+  50% { transform: translateX(5px); }
+  75% { transform: translateX(-3px); }
 }
 .hp-loss-popup {
   position: absolute; right: 4px; top: 50%;
-  font-size: 16px; font-weight: 900; color: #ef4444;
+  font-size: 15px; font-weight: 900; color: #ef4444;
   text-shadow: 0 1px 4px rgba(255,255,255,0.8);
-  animation: hpLossPopup 1s ease-out forwards;
+  animation: hpLossPopup 0.8s ease-out forwards;
   pointer-events: none; z-index: 5;
 }
 @keyframes hpLossPopup {
-  0% { transform: translateY(-50%) scale(0.5); opacity: 0; }
-  20% { transform: translateY(-80%) scale(1.15); opacity: 1; }
+  0% { transform: translateY(-50%) scale(0.6); opacity: 0; }
+  20% { transform: translateY(-90%) scale(1.1); opacity: 1; }
   100% { transform: translateY(-180%) scale(0.95); opacity: 0; }
 }
 
-/* ===== 卡片设计令牌:统一圆角与阴影 ===== */
+/* ===== 卡片设计令牌（仅声明，不强制覆盖样式以避免重绘开销） ===== */
 :root {
-  --card-radius-lg: 16px;     /* 主卡片(rounded-2xl) */
-  --card-radius-md: 12px;     /* 次卡片/按钮(rounded-xl) */
-  --card-radius-sm: 8px;      /* 小元素(rounded-lg) */
-  --card-shadow: 0 2px 8px -2px rgba(15,23,42,0.06), 0 1px 3px -1px rgba(15,23,42,0.04);
-  --card-shadow-md: 0 6px 18px -4px rgba(15,23,42,0.08), 0 3px 6px -2px rgba(15,23,42,0.04);
+  --card-radius-lg: 16px;
+  --card-radius-md: 12px;
+  --card-radius-sm: 8px;
 }
-.dark {
-  --card-shadow: 0 2px 8px -2px rgba(0,0,0,0.25), 0 1px 3px -1px rgba(0,0,0,0.18);
-  --card-shadow-md: 0 6px 18px -4px rgba(0,0,0,0.3), 0 3px 6px -2px rgba(0,0,0,0.2);
-}
-/* 主面板卡片(bg-white/70 + backdrop-blur 系列)统一阴影强度 */
-.bg-white\/70.backdrop-blur.shadow-sm,
-.dark .dark\:bg-gray-800\/70.backdrop-blur.shadow-sm { box-shadow: var(--card-shadow); }
-.bg-white\/70.backdrop-blur.shadow-md,
-.dark .dark\:bg-gray-800\/70.backdrop-blur.shadow-md { box-shadow: var(--card-shadow-md); }
 
 .gacha-flip {
   animation: gachaFlip 0.8s ease-in-out;
@@ -7349,18 +7336,17 @@ function handleWrong(q) {
     gameState.hp -= damage;
     if (gameState.hp < 0) gameState.hp = 0;
     if (protect) showToast('生态护盾生效：损耗减半！', 'info');
-    // 扣血视觉反馈：抖动 + 漂浮 -X 数字
+    // 扣血视觉反馈：抖动 + 漂浮 -X 数字（GPU合成动画，避免阻塞主线程）
     const hpBox = document.getElementById('hp-container');
     if (hpBox) {
       hpBox.classList.remove('hp-damage');
-      void hpBox.offsetWidth;
-      hpBox.classList.add('hp-damage');
       hpBox.querySelectorAll('.hp-loss-popup').forEach(el => el.remove());
+      requestAnimationFrame(() => hpBox.classList.add('hp-damage'));
       const popup = document.createElement('div');
       popup.className = 'hp-loss-popup';
       popup.textContent = '-' + damage;
       hpBox.appendChild(popup);
-      setTimeout(() => popup.remove(), 1000);
+      setTimeout(() => popup.remove(), 800);
     }
   }
 
