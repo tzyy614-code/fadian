@@ -697,6 +697,47 @@ body {
   90% { transform: rotate(0deg) scale(1.01); }
 }
 
+/* ===== HP扣血反馈：抖动 + 红色闪光 ===== */
+.hp-damage { animation: hpDamage 0.5s ease-out; }
+@keyframes hpDamage {
+  0% { transform: translateX(0); }
+  20% { transform: translateX(-6px); background-color: rgba(239,68,68,0.25); border-radius: 8px; }
+  40% { transform: translateX(6px); background-color: rgba(239,68,68,0.18); border-radius: 8px; }
+  60% { transform: translateX(-4px); background-color: rgba(239,68,68,0.12); border-radius: 8px; }
+  80% { transform: translateX(4px); }
+  100% { transform: translateX(0); background-color: transparent; }
+}
+.hp-loss-popup {
+  position: absolute; right: 4px; top: 50%;
+  font-size: 16px; font-weight: 900; color: #ef4444;
+  text-shadow: 0 1px 4px rgba(255,255,255,0.8);
+  animation: hpLossPopup 1s ease-out forwards;
+  pointer-events: none; z-index: 5;
+}
+@keyframes hpLossPopup {
+  0% { transform: translateY(-50%) scale(0.5); opacity: 0; }
+  20% { transform: translateY(-80%) scale(1.15); opacity: 1; }
+  100% { transform: translateY(-180%) scale(0.95); opacity: 0; }
+}
+
+/* ===== 卡片设计令牌:统一圆角与阴影 ===== */
+:root {
+  --card-radius-lg: 16px;     /* 主卡片(rounded-2xl) */
+  --card-radius-md: 12px;     /* 次卡片/按钮(rounded-xl) */
+  --card-radius-sm: 8px;      /* 小元素(rounded-lg) */
+  --card-shadow: 0 2px 8px -2px rgba(15,23,42,0.06), 0 1px 3px -1px rgba(15,23,42,0.04);
+  --card-shadow-md: 0 6px 18px -4px rgba(15,23,42,0.08), 0 3px 6px -2px rgba(15,23,42,0.04);
+}
+.dark {
+  --card-shadow: 0 2px 8px -2px rgba(0,0,0,0.25), 0 1px 3px -1px rgba(0,0,0,0.18);
+  --card-shadow-md: 0 6px 18px -4px rgba(0,0,0,0.3), 0 3px 6px -2px rgba(0,0,0,0.2);
+}
+/* 主面板卡片(bg-white/70 + backdrop-blur 系列)统一阴影强度 */
+.bg-white\/70.backdrop-blur.shadow-sm,
+.dark .dark\:bg-gray-800\/70.backdrop-blur.shadow-sm { box-shadow: var(--card-shadow); }
+.bg-white\/70.backdrop-blur.shadow-md,
+.dark .dark\:bg-gray-800\/70.backdrop-blur.shadow-md { box-shadow: var(--card-shadow-md); }
+
 .gacha-flip {
   animation: gachaFlip 0.8s ease-in-out;
 }
@@ -1969,7 +2010,7 @@ body {
             </div>
           </div>
           <!-- 生态指数（生命值） -->
-          <div class="mb-3">
+          <div class="mb-3 relative" id="hp-container">
             <div class="flex items-center justify-between text-xs font-medium text-gray-700 dark:text-gray-200 mb-2">
               <span class="flex items-center gap-1.5"><i class="fas fa-heart text-rose-500"></i> 生态指数</span>
               <span id="hp-text" class="font-bold">100/100</span>
@@ -2466,12 +2507,22 @@ body {
           <h3 class="text-sm font-bold text-gray-800 dark:text-white mb-4">近7天答题趋势</h3>
           <div class="h-52 relative">
             <canvas id="chart-trend"></canvas>
+            <div id="chart-trend-empty" class="hidden absolute inset-0 flex flex-col items-center justify-center text-center pointer-events-none">
+              <i class="fas fa-chart-line text-3xl text-gray-300 dark:text-gray-600 mb-2"></i>
+              <p class="text-sm text-gray-500 dark:text-gray-300 font-medium">暂无答题数据</p>
+              <p class="text-[11px] mt-1 text-gray-400 dark:text-gray-400">开始答题后将自动生成趋势图</p>
+            </div>
           </div>
         </div>
         <div class="bg-white/70 dark:bg-gray-800/70 backdrop-blur rounded-2xl p-5 mb-4 border border-eco-100 dark:border-gray-700 shadow-sm">
           <h3 class="text-sm font-bold text-gray-800 dark:text-white mb-4">章节正确率分布</h3>
           <div class="h-52 relative">
             <canvas id="chart-branches"></canvas>
+            <div id="chart-branches-empty" class="hidden absolute inset-0 flex flex-col items-center justify-center text-center pointer-events-none">
+              <i class="fas fa-chart-bar text-3xl text-gray-300 dark:text-gray-600 mb-2"></i>
+              <p class="text-sm text-gray-500 dark:text-gray-300 font-medium">暂无章节数据</p>
+              <p class="text-[11px] mt-1 text-gray-400 dark:text-gray-400">完成任意章节答题后展示</p>
+            </div>
           </div>
         </div>
         <div class="bg-white/70 dark:bg-gray-800/70 backdrop-blur rounded-2xl p-5 mb-4 border border-eco-100 dark:border-gray-700 shadow-sm">
@@ -5588,7 +5639,7 @@ const COMICS_DATA = [
       'assets/photo/生态漫画配图/第一编/第一编 (9).jpg'
     ],
     captions: [
-      '《生态环境法典》第一编第六条确立了七项生态环境保护原则，分别为预防为主、系统治理、生态优先、绿色发展、公众参与、社区环保、损害担责。',
+      '《生态环境法典》第一编第六条确立了六项生态环境保护原则，分别为预防为主、系统治理、生态优先、绿色发展、公众参与、损害担责。',
       '《生态环境法典》第一编第十条要求公民增强生态环境保护意识，采取简约适度、绿色低碳的生活方式，自觉履行环保义务、遵守法律法规并配合环保措施。',
       '《生态环境法典》第十二条第四款规定，国家鼓励基层群众性自治组织、社会组织、生态环境保护志愿者等开展环保法律法规和知识宣传，营造良好生态风气。',
       '《生态环境法典》第一编第二十七条规定生态环境保护目标责任制和考核评价制度，考核结果向社会公开；第二十八条确立中央和省、自治区、直辖市两级生态环境保护督察体制。',
@@ -7294,9 +7345,23 @@ function handleWrong(q) {
     showToast('新手保护：本次答题不扣血', 'info');
   } else {
     const protect = gameState.hpProtectExpire && Date.now() < gameState.hpProtectExpire;
-    gameState.hp -= protect ? 8 : 15;
+    const damage = protect ? 8 : 15;
+    gameState.hp -= damage;
     if (gameState.hp < 0) gameState.hp = 0;
     if (protect) showToast('生态护盾生效：损耗减半！', 'info');
+    // 扣血视觉反馈：抖动 + 漂浮 -X 数字
+    const hpBox = document.getElementById('hp-container');
+    if (hpBox) {
+      hpBox.classList.remove('hp-damage');
+      void hpBox.offsetWidth;
+      hpBox.classList.add('hp-damage');
+      hpBox.querySelectorAll('.hp-loss-popup').forEach(el => el.remove());
+      const popup = document.createElement('div');
+      popup.className = 'hp-loss-popup';
+      popup.textContent = '-' + damage;
+      hpBox.appendChild(popup);
+      setTimeout(() => popup.remove(), 1000);
+    }
   }
 
   // 记录错题
@@ -8850,6 +8915,15 @@ const beijingSystem = {
 
 // ===== 海报系统 =====
 function openPosterModal() {
+  // 新用户保护：无任何战绩时引导先答题，避免生成空洞海报
+  const hasAnyStat = gameState.totalCorrect > 0
+    || gameState.completedBranches.length > 0
+    || gameState.achievements.length > 0
+    || gameState.unlockedSpecies.length > 0;
+  if (!hasAnyStat) {
+    showToast('先去答题积累战绩，海报才有内容可展示~', 'info');
+    return;
+  }
   document.getElementById('poster-correct').textContent = gameState.totalCorrect;
   document.getElementById('poster-branches').textContent = gameState.completedBranches.length;
   document.getElementById('poster-achievements').textContent = gameState.achievements.length;
@@ -8963,6 +9037,12 @@ const reportSystem = {
       correct.push(stat.correct);
     }
 
+    const emptyEl = document.getElementById('chart-trend-empty');
+    const canvas = document.getElementById('chart-trend');
+    const hasData = answered.some(v => v > 0);
+    if (emptyEl) emptyEl.classList.toggle('hidden', hasData);
+    if (canvas) canvas.style.opacity = hasData ? '1' : '0.15';
+
     createChart('trendChart', 'chart-trend', 'line', {
       labels: days,
       datasets: [
@@ -8986,6 +9066,12 @@ const reportSystem = {
       gameState.branchAccuracy.lowcarbon,
       gameState.branchAccuracy.liability
     ].map(b => b.total > 0 ? Math.round((b.correct / b.total) * 100) : 0);
+
+    const emptyEl = document.getElementById('chart-branches-empty');
+    const canvas = document.getElementById('chart-branches');
+    const hasData = data.some(v => v > 0);
+    if (emptyEl) emptyEl.classList.toggle('hidden', hasData);
+    if (canvas) canvas.style.opacity = hasData ? '1' : '0.15';
 
     createChart('branchChart', 'chart-branches', 'bar', {
       labels: branches,
